@@ -7,7 +7,13 @@ include $(TOP)/configure/CONFIG
 
 PROD_HOST += pbexport
 pbexport_SRCS += pbexport.cpp
+pbexport_SRCS += pbstreams.cpp
 pbexport_SRCS += EPICSEvent.cpp
+
+TESTPROD_HOST += testPB
+testPB_SRCS += testPB.cpp
+testPB_SRCS += pbstreams.cpp
+testPB_SRCS += EPICSEvent.cpp
 
 PROD_LIBS += Storage Tools ca Com
 
