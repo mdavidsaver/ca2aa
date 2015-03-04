@@ -11,12 +11,17 @@ listpvs_SRCS += listpvs.cpp
 PROD_HOST += pbexport
 pbexport_SRCS += pbexport.cpp
 pbexport_SRCS += pbstreams.cpp
+pbexport_SRCS += pbeutil.cpp
 pbexport_SRCS += EPICSEvent.cpp
 
 TESTPROD_HOST += testPB
 testPB_SRCS += testPB.cpp
 testPB_SRCS += pbstreams.cpp
+testPB_SRCS += pbeutil.cpp
 testPB_SRCS += EPICSEvent.cpp
+
+PROD_HOST += pbgentestdata
+pbgentestdata_SRCS += genTestData.cpp
 
 PROD_LIBS += Storage Tools ca Com
 

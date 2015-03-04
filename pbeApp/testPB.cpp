@@ -8,13 +8,33 @@
 #include <testMain.h>
 
 #include "pbstreams.h"
+#include "pbeutil.h"
 #include "EPICSEvent.pb.h"
+
+static void testTime()
+{
+    testDiag("Test time calculations");
+    int year;
+
+    /* 2015-03-04 18:46:20 UTC */
+    epicsTimeStamp ts = {1425494780-POSIX_TIME_AT_EPICS_EPOCH, 0};
+
+    getYear(ts, &year);
+    testOk1(year==2015);
+
+    epicsTimeStamp ts2 = {1,2};
+    getStartOfYear(2015, &ts2);
+    testOk(ts2.secPastEpoch+POSIX_TIME_AT_EPICS_EPOCH==1420070400, "%lu",
+           (unsigned long)ts2.secPastEpoch+POSIX_TIME_AT_EPICS_EPOCH);
+}
 
 static void testEscape()
 {
     static const char input[] = "hello\nworld";
     static const char expect[] = "hello\x1b\x01world\n";
     escapingarraystream encbuf;
+
+    testDiag("Testing PB escaping");
 
     encbuf.pos = sizeof(input)-1;
     encbuf.inbuf.resize(encbuf.pos);
@@ -99,7 +119,8 @@ static void writeSample()
 
 MAIN(testPB)
 {
-    testPlan(24);
+    testPlan(26);
+    testTime();
     testEscape();
     writeSample();
     return testDone();
