@@ -5,6 +5,9 @@ include $(TOP)/configure/CONFIG
 #  ADD MACRO DEFINITIONS AFTER THIS LINE
 #=============================
 
+PROD_HOST += listpvs
+listpvs_SRCS += listpvs.cpp
+
 PROD_HOST += pbexport
 pbexport_SRCS += pbexport.cpp
 pbexport_SRCS += pbstreams.cpp

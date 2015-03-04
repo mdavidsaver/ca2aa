@@ -2,6 +2,7 @@
 #include <time.h>
 #include <string.h>
 #include <errno.h>
+#include <stdlib.h>
 
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -15,6 +16,7 @@
 // Base
 #include <epicsVersion.h>
 #include <epicsTime.h>
+#include <osiFileName.h>
 // Tools
 #include <AutoPtr.h>
 #include <BinaryTree.h>
@@ -28,7 +30,10 @@
 #include "pbstreams.h"
 #include "EPICSEvent.pb.h"
 
-static const char pvseps[] = ":-{}";
+static const char pvseps_def[] = ":-{}";
+static const char *pvseps = pvseps_def;
+
+static const char pathsep[] = OSI_PATH_SEPARATOR;
 
 // write the PV name part of the path
 std::string pvpathname(const char* pvname)
@@ -38,7 +43,7 @@ std::string pvpathname(const char* pvname)
 
     while((p=fname.find_first_of(pvseps, p))!=std::string::npos)
     {
-        fname[p] = '/';
+        fname[p] = pathsep[0];
         p++;
         if(p==s)
             break;
@@ -46,10 +51,11 @@ std::string pvpathname(const char* pvname)
     return fname;
 }
 
+// Recurisvely create (if needed) the directory components of the path
 void createDirs(const std::string& path)
 {
     size_t p=0;
-    while((p=path.find_first_of('/', p))!=std::string::npos)
+    while((p=path.find_first_of(pathsep[0], p))!=std::string::npos)
     {
         std::string part(path.substr(0, p));
         p++;
@@ -65,6 +71,7 @@ void createDirs(const std::string& path)
     }
 }
 
+// Get the year in which the given timestamp falls
 void getYear(const epicsTimeStamp& t, int *year)
 {
     time_t sec = t.secPastEpoch + POSIX_TIME_AT_EPICS_EPOCH;
@@ -74,6 +81,7 @@ void getYear(const epicsTimeStamp& t, int *year)
     *year = 1900 + result.tm_year;
 }
 
+// Fetch the first second of the given year
 void getStartOfYear(int year, epicsTimeStamp* t)
 {
     tm op;
@@ -95,7 +103,9 @@ std::ostream& operator<<(std::ostream& strm, const epicsTime& t)
 struct PBWriter
 {
     DataReader& reader;
+    // Last returned sample, or NULL if all consumed
     const RawValue::Data *samp;
+    // The year currently being exported
     int year;
     DbrType dtype;
     bool isarray;
@@ -105,50 +115,93 @@ struct PBWriter
     std::ofstream outpb;
 
     PBWriter(DataReader& reader);
-    void write();
+    void write(); // all work is done through this method
 
     void prepFile();
 
-    void (*transcode)(PBWriter&);
+    void (*transcode)(PBWriter&); // Points to a transcode_samples<>() specialization
 };
 
-template<int dbr> struct dbrstruct{};
-#define ENTRY(DBR, dbr, PBC, PT) \
-template<> struct dbrstruct<DBR> {typedef dbr dbrtype; typedef EPICS::PBC pbtype; enum {pbcode=EPICS::PT};}
-//ENTRY(DBR_TIME_CHAR, dbr_time_char, ScalarByte, SCALAR_BYTE);
-ENTRY(DBR_TIME_SHORT, dbr_time_short, ScalarShort, SCALAR_SHORT);
-ENTRY(DBR_TIME_ENUM, dbr_time_enum, ScalarEnum, SCALAR_ENUM);
-ENTRY(DBR_TIME_LONG, dbr_time_long, ScalarInt, SCALAR_INT);
-ENTRY(DBR_TIME_FLOAT, dbr_time_float, ScalarFloat, SCALAR_FLOAT);
-ENTRY(DBR_TIME_DOUBLE, dbr_time_double, ScalarDouble, SCALAR_DOUBLE);
+/* Type information lookup, indexed by DBR_* type, and whether the PV is an array.
+ * Looks up:
+ *  typename dbrstruct<DBR,isarray>::dbrtype (ie. struct dbr_time_double)
+ *  typename dbrstruct<DBR,isarray>::pbtype (ie. class EPICS::ScalarDouble)
+ *  dbrstruct<DBR,isarray>::pbcode (an enum PayloadType value cast to int, ie. EPICS::SCALAR_DOUBLE)
+ */
+template<int dbr, int isarray> struct dbrstruct{};
+#define ENTRY(ARR, DBR, dbr, PBC, PT) \
+template<> struct dbrstruct<DBR, ARR> {typedef dbr dbrtype; typedef EPICS::PBC pbtype; enum {pbcode=EPICS::PT};}
+ENTRY(0, DBR_TIME_STRING, dbr_time_string, ScalarString, SCALAR_STRING);
+ENTRY(0, DBR_TIME_CHAR, dbr_time_char, ScalarByte, SCALAR_BYTE);
+ENTRY(0, DBR_TIME_SHORT, dbr_time_short, ScalarShort, SCALAR_SHORT);
+ENTRY(0, DBR_TIME_ENUM, dbr_time_enum, ScalarEnum, SCALAR_ENUM);
+ENTRY(0, DBR_TIME_LONG, dbr_time_long, ScalarInt, SCALAR_INT);
+ENTRY(0, DBR_TIME_FLOAT, dbr_time_float, ScalarFloat, SCALAR_FLOAT);
+ENTRY(0, DBR_TIME_DOUBLE, dbr_time_double, ScalarDouble, SCALAR_DOUBLE);
+ENTRY(1, DBR_TIME_STRING, dbr_time_string, VectorString, WAVEFORM_STRING);
+ENTRY(1, DBR_TIME_CHAR, dbr_time_char, VectorChar, WAVEFORM_BYTE);
+ENTRY(1, DBR_TIME_SHORT, dbr_time_short, VectorShort, WAVEFORM_SHORT);
+ENTRY(1, DBR_TIME_ENUM, dbr_time_enum, VectorEnum, WAVEFORM_ENUM);
+ENTRY(1, DBR_TIME_LONG, dbr_time_long, VectorInt, WAVEFORM_INT);
+ENTRY(1, DBR_TIME_FLOAT, dbr_time_float, VectorFloat, WAVEFORM_FLOAT);
+ENTRY(1, DBR_TIME_DOUBLE, dbr_time_double, VectorDouble, WAVEFORM_DOUBLE);
 #undef ENTRY
 
+/* Type specific operations helper for transcode_samples<>().
+ *  valueop<DBR,isarray>::set(PBClass, dbr_* pointer, # of elements)
+ *   Assign a scalar or array to the .val of a PB class instance (ie. EPICS::ScalarDouble)
+ */
 template<int dbr, int isarray> struct valueop {
-    static void set(typename dbrstruct<dbr>::pbtype& pbc,
-                    const typename dbrstruct<dbr>::dbrtype* pdbr,
+    static void set(typename dbrstruct<dbr,isarray>::pbtype& pbc,
+                    const typename dbrstruct<dbr,isarray>::dbrtype* pdbr,
                     DbrCount)
     {
         pbc.set_val(pdbr->value);
     }
 };
 
+// Partial specialization for arrays (works for numerics and scalar string)
+// TODO: does this work for array of string?
 template<int dbr> struct valueop<dbr,1> {
-    static void set(typename dbrstruct<dbr>::pbtype& pbc,
-                    const typename dbrstruct<dbr>::dbrtype* pdbr,
+    static void set(typename dbrstruct<dbr,1>::pbtype& pbc,
+                    const typename dbrstruct<dbr,1>::dbrtype* pdbr,
                     DbrCount count)
     {
+        pbc.mutable_val()->Reserve(count);
         for(DbrCount i=0; i<count; i++)
-            pbc.set_val((&pdbr->value)[i]);
+            pbc.add_val((&pdbr->value)[i]);
     }
 };
 
-//TODO special handling for DBR_TIME_CHAR and DBR_TIME_STRING
+// specialization for scalar char
+template<> struct valueop<DBR_TIME_CHAR,0> {
+    static void set(EPICS::ScalarByte& pbc,
+                    const dbr_time_char* pdbr,
+                    DbrCount)
+    {
+        char buf[2];
+        buf[0] = pdbr->value;
+        buf[1] = '\0';
+        pbc.set_val(buf);
+    }
+};
+
+// specialization for vector char
+template<> struct valueop<DBR_TIME_CHAR,1> {
+    static void set(EPICS::VectorChar& pbc,
+                    const dbr_time_char* pdbr,
+                    DbrCount count)
+    {
+        const epicsUInt8 *pbuf = &pdbr->value;
+        pbc.set_val((const char*)pbuf);
+    }
+};
 
 template<int dbr, int isarray>
 void transcode_samples(PBWriter& self)
 {
-    typedef const typename dbrstruct<dbr>::dbrtype sample_t;
-    typedef typename dbrstruct<dbr>::pbtype encoder_t;
+    typedef const typename dbrstruct<dbr,isarray>::dbrtype sample_t;
+    typedef typename dbrstruct<dbr,isarray>::pbtype encoder_t;
     typedef std::vector<std::pair<std::string, std::string> > fieldvalues_t;
 
 
@@ -228,8 +281,9 @@ void PBWriter::prepFile()
         switch(dtype)
         {
 #define CASE(DBR) case DBR: transcode = &transcode_samples<DBR, 0>; \
-    header.set_type((EPICS::PayloadType)dbrstruct<DBR>::pbcode); break
-        //CASE(DBR_TIME_CHAR);
+    header.set_type((EPICS::PayloadType)dbrstruct<DBR, 0>::pbcode); break
+        CASE(DBR_TIME_STRING);
+        CASE(DBR_TIME_CHAR);
         CASE(DBR_TIME_SHORT);
         CASE(DBR_TIME_ENUM);
         CASE(DBR_TIME_LONG);
@@ -247,8 +301,9 @@ void PBWriter::prepFile()
         switch(dtype)
         {
 #define CASE(DBR) case DBR: transcode = &transcode_samples<DBR, 1>; \
-    header.set_type((EPICS::PayloadType)dbrstruct<DBR>::pbcode); break
-        //CASE(DBR_TIME_CHAR);
+    header.set_type((EPICS::PayloadType)dbrstruct<DBR, 1>::pbcode); break
+        CASE(DBR_TIME_STRING);
+        CASE(DBR_TIME_CHAR);
         CASE(DBR_TIME_SHORT);
         CASE(DBR_TIME_ENUM);
         CASE(DBR_TIME_LONG);
@@ -320,19 +375,25 @@ int main(int argc, char *argv[])
     if(argc<2)
         return 2;
 try{
+    {
+        char *seps = getenv("NAMESEPS");
+        if(seps)
+            pvseps = seps;
+    }
     AutoIndex idx;
     idx.open(argv[1]);
-    std::cerr<<"Opened "<<argv[1]<<"\n";
 
-    Index::NameIterator iter;
-    if(!idx.getFirstChannel(iter)) {
-        std::cerr<<"Empty index\n";
-        return 1;
-    }
-    do {
-        std::cerr<<"Visit PV "<<iter.getName().c_str()<<"\n";
+    std::string stdpvname;
+    while(std::getline(std::cin, stdpvname).good()) {
+        if(stdpvname=="<>exit")
+            break;
+        stdString pvname(stdpvname.c_str());
+
+        std::cerr<<"Got "<<stdpvname<<"\n";
+
+        std::cerr<<"Visit PV "<<pvname.c_str()<<"\n";
         stdString dirname;
-        AutoPtr<RTree> tree(idx.getTree(iter.getName(), dirname));
+        AutoPtr<RTree> tree(idx.getTree(pvname, dirname));
 
         epicsTime start,end;
         if(!tree || !tree->getInterval(start, end)) {
@@ -346,15 +407,16 @@ try{
 
         std::cerr<<" Type "<<reader->getType()<<" count "<<reader->getCount()<<"\n";
 
-        if(!reader->find(iter.getName(), &start)) {
+        if(!reader->find(pvname, &start)) {
             std::cerr<<"No data after all\n";
             continue;
         }
 
         PBWriter writer(*reader);
         writer.write();
-
-    }while(idx.getNextChannel(iter));
+        std::cerr<<"Done\n";
+        std::cout<<"Done\n";
+    }
 
     std::cerr<<"Done\n";
     return 0;
