@@ -137,6 +137,8 @@ void transcode_samples(PBWriter& self)
     escapingarraystream encbuf;
     fieldvalues_t fieldvalues;
 
+    epicsUInt32 disconnected_epoch = 0;
+    int prev_severity = 0;
     unsigned long nwrote=0;
     do{
         sample_t *sample = (sample_t*)self.samp;
@@ -149,15 +151,45 @@ void transcode_samples(PBWriter& self)
 
         encoder.Clear();
 
-        encoder.set_secondsintoyear(secintoyear);
-        encoder.set_nano(sample->stamp.nsec);
 
-        if(sample->severity!=0)
-            encoder.set_severity(sample->severity);
+        dbr_short_t sevr = sample->severity;
+
+		if ((sample->severity == 3904) || (sample->severity == 3872) || (sample->severity == 3848)) {
+			if (disconnected_epoch == 0) {
+				disconnected_epoch = sample->stamp.secPastEpoch;
+			}
+		}
+
+		if (sevr!=0)
+			encoder.set_severity(sample->severity);
         if(sample->status!=0)
             encoder.set_status(sample->status);
 
+        encoder.set_secondsintoyear(secintoyear);
+        encoder.set_nano(sample->stamp.nsec);
+
         valueop<dbr, isarray>::set(encoder, sample, self.reader.getCount());
+
+        if (disconnected_epoch != 0 && sevr == 0) {
+        	EPICS::FieldValue* FV(encoder.add_fieldvalues());
+			std::stringstream ss; ss << (disconnected_epoch + POSIX_TIME_AT_EPICS_EPOCH);
+			FV->set_name("cnxlostepsecs");
+			FV->set_val(ss.str());
+
+			EPICS::FieldValue* FV2(encoder.add_fieldvalues());
+			std::stringstream ss2; ss2 << (sample->stamp.secPastEpoch + POSIX_TIME_AT_EPICS_EPOCH);
+			FV2->set_name("cnxregainedepsecs");
+			FV2->set_val(ss2.str());
+
+			if (prev_severity == 3872) {
+				EPICS::FieldValue* FV3(encoder.add_fieldvalues());
+				FV3->set_name("startup");
+				FV3->set_val("true");
+			}
+
+			disconnected_epoch = 0;
+		}
+        prev_severity = sevr;
 
         if(fieldvalues.size())
         {
@@ -187,6 +219,8 @@ void transcode_samples(PBWriter& self)
         }
 
     }while((self.samp=self.reader.next()) && self.outpb.good());
+
+
     std::cerr<<"End file "<<self.reader.next()<<" "<<self.outpb.good()<<"\n";
     std::cerr<<"Wrote "<<nwrote<<"\n";
 }
@@ -203,7 +237,7 @@ void PBWriter::prepFile()
 
     EPICS::PayloadInfo header;
 
-    std::cerr<<"is a "<<(isarray?"scalar\n":"array\n");
+    std::cerr<<"is a "<<(isarray?"array\n":"scalar\n");
     if(!isarray) {
         // Scalars
         switch(dtype)
