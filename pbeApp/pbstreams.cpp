@@ -65,9 +65,9 @@ void escapingarraystream::finalize()
         }
         switch(c)
         {
-        case '\n': outbuf[o++] = 1; break;
-        case '\r': outbuf[o++] = 2; break;
-        case '\x1b': outbuf[o++] = 3; break;
+        case '\x1b': outbuf[o++] = 1; break;
+        case '\n': outbuf[o++] = 2; break;
+        case '\r': outbuf[o++] = 3; break;
         }
     }
     outbuf.push_back('\n');
