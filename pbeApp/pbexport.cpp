@@ -33,6 +33,7 @@ struct PBWriter
     DataReader& reader;
     // Last returned sample, or NULL if all consumed
     const RawValue::Data *samp;
+    const CtrlInfo& info;
     // The year currently being exported
     int year;
     DbrType dtype;
@@ -89,7 +90,7 @@ template<int dbr, int isarray> struct valueop {
 };
 
 // Partial specialization for arrays (works for numerics and scalar string)
-// TODO: does this work for array of string?
+// does this work for array of string? Verified by jbobnar: YES, it works for array of strings
 template<int dbr> struct valueop<dbr,1> {
     static void set(typename dbrstruct<dbr,1>::pbtype& pbc,
                     const typename dbrstruct<dbr,1>::dbrtype* pdbr,
@@ -140,6 +141,48 @@ void transcode_samples(PBWriter& self)
     epicsUInt32 disconnected_epoch = 0;
     int prev_severity = 0;
     unsigned long nwrote=0;
+    int last_day_fields_written = 0;
+
+    //prepare the field values and write them every day
+    //numeric values have all except PREC, which is only for DOUBLE and FLOAT
+    //enum has only labels, string has nothing
+	std::stringstream ss;
+	if (dbr == DBR_TIME_SHORT || dbr == DBR_TIME_INT || dbr == DBR_TIME_LONG || dbr == DBR_TIME_FLOAT
+			|| dbr == DBR_TIME_DOUBLE) {
+		ss << self.info.getDisplayHigh();
+		fieldvalues.push_back(std::make_pair("HOPR",ss.str()));
+		ss.str(""); ss.clear(); ss << self.info.getDisplayLow();
+		fieldvalues.push_back(std::make_pair("LOPR",ss.str()));
+		ss.str(""); ss.clear(); ss << self.info.getUnits();
+		fieldvalues.push_back(std::make_pair("EGU",ss.str()));
+		if (!isarray) {
+			ss.str(""); ss.clear(); ss << self.info.getHighAlarm();
+			fieldvalues.push_back(std::make_pair("HIHI",ss.str()));
+			ss.str(""); ss.clear(); ss << self.info.getHighWarning();
+			fieldvalues.push_back(std::make_pair("HIGH",ss.str()));
+			ss.str(""); ss.clear(); ss << self.info.getLowWarning();
+			fieldvalues.push_back(std::make_pair("LOW",ss.str()));
+			ss.str(""); ss.clear(); ss << self.info.getLowAlarm();
+			fieldvalues.push_back(std::make_pair("LOLO",ss.str()));
+		}
+	}
+	if (dbr == DBR_TIME_FLOAT || dbr == DBR_TIME_DOUBLE) {
+		ss.str(""); ss.clear(); ss << self.info.getPrecision();
+		fieldvalues.push_back(std::make_pair("PREC",ss.str()));
+	}
+	if (dbr == DBR_TIME_ENUM) {
+		stdString state;
+		if (self.info.getType() == CtrlInfo::Enumerated) {
+			size_t i, num = self.info.getNumStates();
+			for (i = 0; i < num; i++) {
+				self.info.getState(i,state);
+				ss.str(""); ss.clear(); ss << i;
+				fieldvalues.push_back(std::make_pair(ss.str(),state.c_str()));
+			}
+
+		}
+	}
+
     do{
         sample_t *sample = (sample_t*)self.samp;
 
@@ -151,6 +194,12 @@ void transcode_samples(PBWriter& self)
 
         encoder.Clear();
 
+        int write_fields = 0;
+        int day = sample->stamp.secPastEpoch / 86400;
+        if (day != last_day_fields_written) {
+        	//if we switched to a new day, write the fields
+        	write_fields = 1;
+        }
 
         dbr_short_t sevr = sample->severity;
 
@@ -158,6 +207,26 @@ void transcode_samples(PBWriter& self)
 			if (disconnected_epoch == 0) {
 				disconnected_epoch = sample->stamp.secPastEpoch;
 			}
+			write_fields = 0; //don't write fields if disconnected
+		} else if (disconnected_epoch != 0) {
+			//this is the first sample with value after a disconnected one
+			EPICS::FieldValue* FV(encoder.add_fieldvalues());
+			std::stringstream str; str << (disconnected_epoch + POSIX_TIME_AT_EPICS_EPOCH);
+			FV->set_name("cnxlostepsecs");
+			FV->set_val(str.str());
+
+			EPICS::FieldValue* FV2(encoder.add_fieldvalues());
+			str.str(""); str.clear(); str << (sample->stamp.secPastEpoch + POSIX_TIME_AT_EPICS_EPOCH);
+			FV2->set_name("cnxregainedepsecs");
+			FV2->set_val(str.str());
+
+			if (prev_severity == 3872) {
+				EPICS::FieldValue* FV3(encoder.add_fieldvalues());
+				FV3->set_name("startup");
+				FV3->set_val("true");
+			}
+
+			disconnected_epoch = 0;
 		}
 
 		if (sevr!=0)
@@ -170,28 +239,9 @@ void transcode_samples(PBWriter& self)
 
         valueop<dbr, isarray>::set(encoder, sample, self.reader.getCount());
 
-        if (disconnected_epoch != 0 && sevr == 0) {
-        	EPICS::FieldValue* FV(encoder.add_fieldvalues());
-			std::stringstream ss; ss << (disconnected_epoch + POSIX_TIME_AT_EPICS_EPOCH);
-			FV->set_name("cnxlostepsecs");
-			FV->set_val(ss.str());
-
-			EPICS::FieldValue* FV2(encoder.add_fieldvalues());
-			std::stringstream ss2; ss2 << (sample->stamp.secPastEpoch + POSIX_TIME_AT_EPICS_EPOCH);
-			FV2->set_name("cnxregainedepsecs");
-			FV2->set_val(ss2.str());
-
-			if (prev_severity == 3872) {
-				EPICS::FieldValue* FV3(encoder.add_fieldvalues());
-				FV3->set_name("startup");
-				FV3->set_val("true");
-			}
-
-			disconnected_epoch = 0;
-		}
         prev_severity = sevr;
 
-        if(fieldvalues.size())
+        if(fieldvalues.size() && write_fields)
         {
             // encoder accumulated fieldvalues for this sample
             for(fieldvalues_t::const_iterator it=fieldvalues.begin(), end=fieldvalues.end();
@@ -201,7 +251,8 @@ void transcode_samples(PBWriter& self)
                 FV->set_name(it->first);
                 FV->set_val(it->second);
             }
-            fieldvalues.clear();
+            //fieldvalues.clear(); // don't clear the fields, we will use them again later
+            last_day_fields_written = day;
         }
 
         try{
@@ -313,7 +364,8 @@ void PBWriter::prepFile()
 
 PBWriter::PBWriter(DataReader& reader)
     :reader(reader)
-    ,year(0)
+	,info(reader.getInfo())
+	,year(0)
 {
     samp = reader.get();
 }
@@ -377,7 +429,6 @@ try{
         PBWriter writer(*reader);
         writer.write();
         std::cerr<<"Done\n";
-        std::cout<<"Done\n";
     }
 
     std::cerr<<"Done\n";
