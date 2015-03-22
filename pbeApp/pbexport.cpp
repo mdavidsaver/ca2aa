@@ -174,11 +174,16 @@ void transcode_samples(PBWriter& self)
 		stdString state;
 		if (self.info.getType() == CtrlInfo::Enumerated) {
 			size_t i, num = self.info.getNumStates();
-			for (i = 0; i < num; i++) {
-				self.info.getState(i,state);
-				ss.str(""); ss.clear(); ss << i;
-				fieldvalues.push_back(std::make_pair(ss.str(),state.c_str()));
+			if (num > 0) {
+				self.info.getState(0,state);
+				ss <<state.c_str();
+				for (i = 1; i < num; i++) {
+					self.info.getState(i,state);
+					ss << ";" << state.c_str();
+				}
+				fieldvalues.push_back(std::make_pair("states",ss.str()));
 			}
+
 
 		}
 	}
