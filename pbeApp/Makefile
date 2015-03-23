@@ -21,6 +21,8 @@ testPB_SRCS += pbeutil.cpp
 testPB_SRCS += EPICSEvent.cpp
 TESTS += testPB
 
+TESTS += testconvert.py
+
 PROD_HOST += pbgentestdata
 pbgentestdata_SRCS += genTestData.cpp
 
@@ -39,5 +41,13 @@ include $(TOP)/configure/RULES
 %.pb.cc %.pb.h: ../%.proto
 	protoc -I.. --cpp_out=. $<
 
+%_pb2.py: ../%.proto
+	protoc -I.. --python_out=. $<
+
+%.py: ../%.py
+	install -m755 $< $@
+
 pbexport$(OBJ): EPICSEvent.pb.h
 EPICSEvent$(OBJ): EPICSEvent.pb.cc
+
+testconvert.py: EPICSEvent_pb2.py
