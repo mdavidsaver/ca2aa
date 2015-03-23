@@ -438,6 +438,7 @@ try{
         PBWriter writer(*reader);
         writer.write();
         std::cerr<<"Done\n";
+        std::cout<<"Done\n"; // exportall.py uses this
     }
 
     std::cerr<<"Done\n";
