@@ -278,10 +278,10 @@ void transcode_samples(PBWriter& self)
             // skip
         }
 
-    }while((self.samp=self.reader.next()) && self.outpb.good());
+    }while(self.outpb.good() && (self.samp=self.reader.next()));
 
 
-    std::cerr<<"End file "<<self.reader.next()<<" "<<self.outpb.good()<<"\n";
+    std::cerr<<"End file "<<self.samp<<" "<<self.outpb.good()<<"\n";
     std::cerr<<"Wrote "<<nwrote<<"\n";
 }
 
