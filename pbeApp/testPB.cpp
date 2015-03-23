@@ -31,7 +31,7 @@ static void testTime()
 static void testEscape()
 {
     static const char input[] = "hello\nworld";
-    static const char expect[] = "hello\x1b\x01world\n";
+    static const char expect[] = "hello\x1b\x02world\n";
     escapingarraystream encbuf;
 
     testDiag("Testing PB escaping");
