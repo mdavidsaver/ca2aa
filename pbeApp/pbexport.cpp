@@ -183,12 +183,16 @@ void transcode_samples(PBWriter& self)
 				}
 				fieldvalues.push_back(std::make_pair("states",ss.str()));
 			}
-
-
 		}
 	}
 
+	CtrlInfo::Type sampleType = self.info.getType();
+
     do{
+    	if (self.info.getType() != sampleType) {
+    		std::cerr<<"The type of PV changed from " << sampleType << " to " << self.info.getType() << "\n";
+    		return;
+    	}
         sample_t *sample = (sample_t*)self.samp;
 
         if(sample->stamp.secPastEpoch>=self.endofyear.secPastEpoch) {
