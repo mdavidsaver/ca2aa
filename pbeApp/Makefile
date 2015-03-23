@@ -19,6 +19,7 @@ testPB_SRCS += testPB.cpp
 testPB_SRCS += pbstreams.cpp
 testPB_SRCS += pbeutil.cpp
 testPB_SRCS += EPICSEvent.cpp
+TESTS += testPB
 
 PROD_HOST += pbgentestdata
 pbgentestdata_SRCS += genTestData.cpp
@@ -26,6 +27,8 @@ pbgentestdata_SRCS += genTestData.cpp
 PROD_LIBS += Storage Tools ca Com
 
 PROD_SYS_LIBS += protobuf
+
+TESTSCRIPTS_HOST += $(TESTS:%=%.t)
 
 #===========================
 
