@@ -41,19 +41,19 @@ static void genCounter(Index& idx)
     AutoPtr<DataWriter> writer(new DataWriter(idx, name, info,
                                               DBR_TIME_LONG, 1, 1.0, 10));
 
-    dbr_time_double val;
+    dbr_time_long val;
     val.severity = val.status = 0;
     val.stamp.nsec = 0;
 
     val.value = 0;
     val.stamp.secPastEpoch = BASETIME;
-    writer->add(&val);
+    writer->add((dbr_time_double*)&val);
 
     for(size_t i=0; i<10; i++) {
         val.value++;
         val.stamp.secPastEpoch++;
         val.stamp.nsec+=10;
-        writer->add(&val);
+        writer->add((dbr_time_double*)&val);
     }
 
     writer.assign(0);
@@ -124,7 +124,7 @@ static void getDisconn(Index& idx)
     info.setNumeric(0, "tick", 0, 10, 0, 0, 0, 0);
 
     AutoPtr<DataWriter> writer(new DataWriter(idx, name, info,
-                                              DBR_TIME_LONG, 1, 1.0, 10));
+                                              DBR_TIME_DOUBLE, 1, 1.0, 10));
 
     dbr_time_double val;
     val.severity = val.status = 0;
@@ -155,7 +155,7 @@ static void getRestart(Index& idx)
     info.setNumeric(0, "tick", 0, 10, 0, 0, 0, 0);
 
     AutoPtr<DataWriter> writer(new DataWriter(idx, name, info,
-                                              DBR_TIME_LONG, 1, 1.0, 10));
+                                              DBR_TIME_DOUBLE, 1, 1.0, 10));
 
     dbr_time_double val;
     val.severity = val.status = 0;
@@ -187,7 +187,7 @@ int main(int argc, char *argv[])
 {
     if(argc<2)
         return 2;
-    {
+    try{
         IndexFile idx;
         idx.open(argv[1], false);
         genCounter(idx);
@@ -195,6 +195,9 @@ int main(int argc, char *argv[])
         getEnum(idx);
         getDisconn(idx);
         getRestart(idx);
+        return 0;
+    }catch(std::exception& e){
+        std::cerr<<"Error: "<<e.what()<<"\n";
+        return 1;
     }
-    return 0;
 }
