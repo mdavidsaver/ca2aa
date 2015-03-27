@@ -80,6 +80,54 @@ void getStartOfYear(int year, epicsTimeStamp* t)
     t->nsec = 0;
 }
 
+int unescape(const char *in, size_t inlen, char *out, size_t outlen)
+{
+    char *initout = out;
+    int escape = 0;
+
+    for(; inlen; inlen--, in++) {
+        char I = *in;
+
+        if(escape) {
+            escape = 0;
+            switch(I) {
+            case 1: *out++ = 0x1b; break;
+            case 2: *out++ = '\n'; break;
+            case 3: *out++ = '\r'; break;
+            default:               return 1;
+            }
+        } else if(I==0x1b){
+            escape = 1;
+        } else {
+            *out++ = I;
+        }
+    }
+    if(initout+outlen!=out)
+        return 2;
+    return 0;
+}
+
+/* compute the size of the unescaped string */
+size_t unescape_plan(const char *in, size_t inlen)
+{
+    size_t outlen = inlen;
+
+    while(inlen-- && outlen>=0) {
+        if(*in++ == 0x1b) {
+            // skip next
+            in++;
+            inlen--;
+            // remove one from output
+            outlen--;
+        }
+    }
+
+    if(outlen<0)
+        return -1;
+
+    return outlen;
+}
+
 std::ostream& operator<<(std::ostream& strm, const epicsTime& t)
 {
     time_t_wrapper sec(t);

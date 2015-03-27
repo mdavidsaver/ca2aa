@@ -11,6 +11,7 @@
 #include <sstream>
 #include <fstream>
 #include <stdexcept>
+#include <algorithm>
 
 // Base
 #include <epicsVersion.h>
@@ -32,6 +33,7 @@ int main(int argc, char *argv[])
 try{
     AutoIndex idx;
     idx.open(argv[1]);
+    std::vector<stdString> names;
 
     Index::NameIterator iter;
     if(!idx.getFirstChannel(iter)) {
@@ -39,9 +41,14 @@ try{
         return 1;
     }
     do {
-        std::cout<<iter.getName().c_str()<<"\n";
+    	names.push_back(iter.getName());
+        //std::cout<<iter.getName().c_str()<<"\n";
     }while(idx.getNextChannel(iter));
 
+    std::sort(names.begin(), names.end());
+    for( std::vector<stdString>::const_iterator i = names.begin(); i != names.end(); ++i) {
+        std::cout << (*i).c_str() << "\n";
+    }
     return 0;
 }catch(std::exception& e){
     std::cerr<<"Exception: "<<e.what()<<"\n";

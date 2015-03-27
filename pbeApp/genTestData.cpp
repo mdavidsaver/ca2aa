@@ -183,6 +183,78 @@ static void getRestart(Index& idx)
     writer->add((dbr_time_double*)&val);
 }
 
+// ArchiveEngine disable archiving
+static void getDisable(Index& idx)
+{
+    stdString name("pv:disable1");
+    CtrlInfo info;
+    info.setNumeric(0, "tick", 0, 10, 0, 0, 0, 0);
+
+    AutoPtr<DataWriter> writer(new DataWriter(idx, name, info,
+                                              DBR_TIME_DOUBLE, 1, 1.0, 10));
+
+    dbr_time_double val;
+    val.severity = val.status = 0;
+    val.stamp.nsec = 0;
+
+    val.value = 42;
+    val.stamp.secPastEpoch = BASETIME;
+    writer->add((dbr_time_double*)&val);
+
+    val.value = 0;
+    val.severity = 3904; // Disconnected
+    val.stamp.secPastEpoch += 5;
+    val.stamp.nsec = 5000;
+    writer->add((dbr_time_double*)&val);
+
+    val.value = 0;
+    val.severity = 3848; // Archive_Disabled
+    val.stamp.nsec = 6000;
+    writer->add((dbr_time_double*)&val);
+
+    val.value = 42;
+    val.severity = 0;
+    val.stamp.secPastEpoch += 5;
+    val.stamp.nsec = 4000;
+    writer->add((dbr_time_double*)&val);
+}
+
+// ArchiveEngine disable archiving
+static void getRepeat(Index& idx)
+{
+    stdString name("pv:repeat1");
+    CtrlInfo info;
+    info.setNumeric(0, "tick", 0, 10, 0, 0, 0, 0);
+
+    AutoPtr<DataWriter> writer(new DataWriter(idx, name, info,
+                                              DBR_TIME_DOUBLE, 1, 1.0, 10));
+
+    dbr_time_double val;
+    val.severity = val.status = 0;
+    val.stamp.nsec = 0;
+
+    val.value = 42;
+    val.stamp.secPastEpoch = BASETIME;
+    writer->add((dbr_time_double*)&val);
+
+    val.value = 12;
+    val.severity = 3856; // Repeat
+    val.stamp.secPastEpoch += 5;
+    val.stamp.nsec = 5000;
+    writer->add((dbr_time_double*)&val);
+
+    val.value = 5;
+    val.severity = 3968; // Esc_Repeat
+    val.stamp.nsec = 6000;
+    writer->add((dbr_time_double*)&val);
+
+    val.value = 42;
+    val.severity = 0;
+    val.stamp.secPastEpoch += 5;
+    val.stamp.nsec = 4000;
+    writer->add((dbr_time_double*)&val);
+}
+
 int main(int argc, char *argv[])
 {
     if(argc<2)
@@ -195,6 +267,8 @@ int main(int argc, char *argv[])
         getEnum(idx);
         getDisconn(idx);
         getRestart(idx);
+        getDisable(idx);
+        getRepeat(idx);
         return 0;
     }catch(std::exception& e){
         std::cerr<<"Error: "<<e.what()<<"\n";

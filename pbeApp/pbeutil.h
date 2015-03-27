@@ -8,6 +8,9 @@
 extern const char *pvseps;
 std::string pvpathname(const char* pvname);
 
+size_t unescape_plan(const char *in, size_t inlen);
+int unescape(const char *in, size_t inlen, char *out, size_t outlen);
+
 void createDirs(const std::string& path);
 
 void getYear(const epicsTimeStamp& t, int *year);

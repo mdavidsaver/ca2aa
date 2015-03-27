@@ -170,7 +170,6 @@ class TestDate(unittest.TestCase):
                     ('HOPR', '10'),('LOPR', '0'),('EGU', 'tick'),('HIHI', '0'),
                     ('HIGH', '0'),('LOW', '0'),('LOLO', '0'),('PREC', '0'),
                     ]}),
-                (0, {'sec':1425494785, 'ns':5000, 'sevr':3904}), # TODO: wrong?
                 (42, {'sec':1425494790, 'ns':4000, 'fv':[
                     ('cnxlostepsecs', '1425494785'), ('cnxregainedepsecs', '1425494790')]}),
                 ])
@@ -184,10 +183,35 @@ class TestDate(unittest.TestCase):
                     ('HOPR', '10'),('LOPR', '0'),('EGU', 'tick'),('HIHI', '0'),
                     ('HIGH', '0'),('LOW', '0'),('LOLO', '0'),('PREC', '0'),
                     ]}),
-                (0, {'sec':1425494785, 'ns':5000, 'sevr':3904}), # TODO: wrong?
-                (0, {'sec':1425494785, 'ns':6000, 'sevr':3872}), # TODO: wrong?
                 (42, {'sec':1425494790, 'ns':4000, 'fv':[
                     ('cnxlostepsecs', '1425494785'), ('cnxregainedepsecs', '1425494790'), ('startup', 'true')]}),
+                ])
+
+    def test_disable(self):
+        self.convertPV('pv:disable1')
+        self.assertPBFile('pv/disable1:2015.pb',
+            head={'year':2015, 'type':6},
+            contents=[
+                (42, {'sec':1425494780, 'fv':[
+                    ('HOPR', '10'),('LOPR', '0'),('EGU', 'tick'),('HIHI', '0'),
+                    ('HIGH', '0'),('LOW', '0'),('LOLO', '0'),('PREC', '0'),
+                    ]}),
+                (42, {'sec':1425494790, 'ns':4000, 'fv':[
+                    ('cnxlostepsecs', '1425494785'), ('cnxregainedepsecs', '1425494790'), ('resume', 'true')]}),
+                ])
+
+    def test_repeat(self):
+        self.convertPV('pv:repeat1')
+        self.assertPBFile('pv/repeat1:2015.pb',
+            head={'year':2015, 'type':6},
+            contents=[
+                (42, {'sec':1425494780, 'fv':[
+                    ('HOPR', '10'),('LOPR', '0'),('EGU', 'tick'),('HIHI', '0'),
+                    ('HIGH', '0'),('LOW', '0'),('LOLO', '0'),('PREC', '0'),
+                    ]}),
+                (12, {'sec':1425494785, 'ns':5000, 'sevr':3856}),
+                (5, {'sec':1425494785, 'ns':6000, 'sevr':3968}),
+                (42, {'sec':1425494790, 'ns':4000}),
                 ])
 
 if __name__=='__main__':

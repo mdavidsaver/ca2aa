@@ -4,6 +4,10 @@ import sys, os, os.path, glob
 import threading
 from Queue import Queue
 import subprocess as SP
+import re
+
+from signal import signal, SIGPIPE, SIG_DFL 
+signal(SIGPIPE,SIG_DFL) 
 
 mydir = os.path.dirname(os.path.abspath(sys.argv[0]))
 
@@ -16,6 +20,7 @@ def getargs():
                    help='Number of exporting worker prcesses.  (default 2)')
     P.add_argument('--seps', default=':-{}', help='PV name seperators (default ":-{}")')
     P.add_argument('--progs', default=mydir, help='Directory under which ./bin/*/listpvs helpers are found')
+    P.add_argument('--pv', default='^.*$', help='Regular expression: only PVs that match will be exported')
     return P.parse_args()
 
 args = getargs()
@@ -41,6 +46,10 @@ pvs = SP.check_output([listpvs, idxfile])
 
 jobs = Queue(10)
 
+
+regex = re.compile(args.pv)
+
+
 def worker():
   slave = SP.Popen([pbexport, idxfile],
                    stdin=SP.PIPE, stdout=SP.PIPE,
@@ -50,6 +59,8 @@ def worker():
     pv = jobs.get()
     if pv is None:
       break
+    if regex.match(pv) is None:
+      continue
     print 'pv',pv
     slave.stdin.write(pv+'\n')
     # wait for worker to complete

@@ -34,6 +34,7 @@ struct PBWriter
     // Last returned sample, or NULL if all consumed
     const RawValue::Data *samp;
     const CtrlInfo& info;
+
     // The year currently being exported
     int year;
     DbrType dtype;
@@ -42,11 +43,14 @@ struct PBWriter
     epicsTimeStamp endofyear;
 
     std::ofstream outpb;
+    int error;
 
     PBWriter(DataReader& reader);
     void write(); // all work is done through this method
 
     void prepFile();
+
+    void skipForward(const char *file);
 
     void (*transcode)(PBWriter&); // Points to a transcode_samples<>() specialization
 };
@@ -186,17 +190,17 @@ void transcode_samples(PBWriter& self)
 		}
 	}
 
-	CtrlInfo::Type sampleType = self.info.getType();
-
     do{
-    	if (self.info.getType() != sampleType) {
-    		std::cerr<<"The type of PV changed from " << sampleType << " to " << self.info.getType() << "\n";
+    	if (self.reader.getType() != self.dtype) {
+    		std::cerr<<"ERROR: The type of PV changed from " << self.dtype << " to " << self.reader.getType() << "\n";
+    		self.error = 1;
     		return;
     	}
         sample_t *sample = (sample_t*)self.samp;
 
         if(sample->stamp.secPastEpoch>=self.endofyear.secPastEpoch) {
-            std::cerr<<"Year boundary "<<sample->stamp.secPastEpoch<<" "<<self.endofyear.secPastEpoch;
+            std::cerr<<"Year boundary "<<sample->stamp.secPastEpoch<<" "<<self.endofyear.secPastEpoch <<"\n";
+            std::cerr<<"wrote: "<<nwrote;
             return;
         }
         unsigned int secintoyear = sample->stamp.secPastEpoch - self.startofyear.secPastEpoch;
@@ -212,11 +216,19 @@ void transcode_samples(PBWriter& self)
 
         dbr_short_t sevr = sample->severity;
 
-		if ((sample->severity == 3904) || (sample->severity == 3872) || (sample->severity == 3848)) {
+		if ((sevr == 3904) || (sevr == 3872) || (sevr == 3848)) {
 			if (disconnected_epoch == 0) {
 				disconnected_epoch = sample->stamp.secPastEpoch;
 			}
+			if ((sevr == 3872 || sevr == 3848) && prev_severity < 4) {
+				prev_severity = sevr;
+			}
 			write_fields = 0; //don't write fields if disconnected
+			continue;
+		} else if (sevr > 3) {
+			//sevr == 3856 || sevr == 3968
+			std::cerr<<"Severity "<< sevr<<" encountered\n";
+			write_fields = 0; //don't write fields if special severity
 		} else if (disconnected_epoch != 0) {
 			//this is the first sample with value after a disconnected one
 			EPICS::FieldValue* FV(encoder.add_fieldvalues());
@@ -233,8 +245,12 @@ void transcode_samples(PBWriter& self)
 				EPICS::FieldValue* FV3(encoder.add_fieldvalues());
 				FV3->set_name("startup");
 				FV3->set_val("true");
+			} else if (prev_severity == 3848) {
+				EPICS::FieldValue* FV3(encoder.add_fieldvalues());
+				FV3->set_name("resume");
+				FV3->set_val("true");
 			}
-
+			prev_severity = sevr;
 			disconnected_epoch = 0;
 		}
 
@@ -247,8 +263,6 @@ void transcode_samples(PBWriter& self)
         encoder.set_nano(sample->stamp.nsec);
 
         valueop<dbr, isarray>::set(encoder, sample, self.reader.getCount());
-
-        prev_severity = sevr;
 
         if(fieldvalues.size() && write_fields)
         {
@@ -283,6 +297,61 @@ void transcode_samples(PBWriter& self)
 
     std::cerr<<"End file "<<self.samp<<" "<<self.outpb.good()<<"\n";
     std::cerr<<"Wrote "<<nwrote<<"\n";
+}
+
+void PBWriter::skipForward(const char* file)
+{
+	//find the last sample that was written into the given file
+	std::ifstream inpstr(file);
+	std::string temp;
+	char *bfr;
+	const char *str;
+	//doesn't matter which data type we choose, because we are interested only into
+	//timestamp, which is stored at the beginning of the event, so it's the same for
+	//all types. However, VectorString is slightly different as it has a different value.
+	//Other types don't work with VectorString, but VectorString works for all.
+	EPICS::VectorString en;
+
+	if (!std::getline(inpstr, temp).good()) return; //payload info
+/*
+	EPICS::PayloadInfo info;
+	str = temp.c_str();
+	int l = unescape_plan(str,temp.length());
+	bfr = (char*)malloc(sizeof(char) * l);
+	unescape(temp.c_str(), temp.length(),bfr,l);
+	info.ParseFromString(temp);
+	free(bfr);
+*/
+	while(std::getline(inpstr, temp).good()) {
+		str = temp.c_str();
+		int l = unescape_plan(str,temp.length());
+		bfr = (char*)malloc(sizeof(char) * l);
+		unescape(temp.c_str(), temp.length(),bfr,l);
+		en.ParseFromString(bfr);
+		free(bfr);
+	}
+	inpstr.close();
+	unsigned int sec = en.secondsintoyear() + startofyear.secPastEpoch;
+	unsigned int nano = en.nano();
+
+	//now skip forward to the first sample that is later than the last event read from the file
+	unsigned int sampseconds = samp->stamp.secPastEpoch;
+	while((sampseconds < sec) && samp) {
+		samp = reader.next();
+		if (samp)
+			sampseconds = samp->stamp.secPastEpoch;
+	}
+
+	if (samp && (sampseconds == sec)) {
+		unsigned int sampnano = samp->stamp.nsec;
+		while (samp && (sampseconds == sec && sampnano <= nano)) {
+			samp = reader.next();
+			if (samp) {
+				sampseconds = samp->stamp.secPastEpoch;
+				sampnano = samp->stamp.nsec;
+			}
+		}
+	}
 }
 
 void PBWriter::prepFile()
@@ -347,13 +416,16 @@ void PBWriter::prepFile()
     std::ostringstream fname;
     fname << pvpathname(reader.channel_name.c_str())<<":"<<year<<".pb";
 
+    int fileexists = 0;
     {
         FILE *fp = fopen(fname.str().c_str(), "r");
         if(fp) {
-            fclose(fp);
-            std::cerr<<"File already exists! "<<fname.str()<<"\n";
-            samp=NULL;
-            return;
+        	fclose(fp);
+        	fileexists = 1;
+        	skipForward(fname.str().c_str());
+            //std::cerr<<"ERROR: File already exists! "<<fname.str()<<"\n";
+            //samp=NULL;
+            //return;
         }
     }
 
@@ -362,13 +434,17 @@ void PBWriter::prepFile()
 
     escapingarraystream encbuf;
     {
-        google::protobuf::io::CodedOutputStream encstrm(&encbuf);
-        header.SerializeToCodedStream(&encstrm);
+    	if (!fileexists) {
+			google::protobuf::io::CodedOutputStream encstrm(&encbuf);
+			header.SerializeToCodedStream(&encstrm);
+    	}
     }
     encbuf.finalize();
 
-    outpb.open(fname.str().c_str());
-    outpb.write(&encbuf.outbuf[0], encbuf.outbuf.size());
+    outpb.open(fname.str().c_str(), std::fstream::app);
+    if (!fileexists) { //if file exists do not write header
+    	outpb.write(&encbuf.outbuf[0], encbuf.outbuf.size());
+    }
 }
 
 PBWriter::PBWriter(DataReader& reader)
@@ -381,11 +457,14 @@ PBWriter::PBWriter(DataReader& reader)
 
 void PBWriter::write()
 {
+	error = 0;
     while(samp) {
         prepFile();
+        if (!samp) break;
         (*transcode)(*this);
         bool ok = outpb.good();
         outpb.close();
+        if (error) break;
         if(!ok) {
             std::cerr<<"Error writing file\n";
             break;
@@ -420,7 +499,7 @@ try{
 
         epicsTime start,end;
         if(!tree || !tree->getInterval(start, end)) {
-            std::cerr<<"No Data or no times\n";
+            std::cerr<<"WARN: No Data or no times\n";
             continue;
         }
 
@@ -431,7 +510,7 @@ try{
         std::cerr<<" Type "<<reader->getType()<<" count "<<reader->getCount()<<"\n";
 
         if(!reader->find(pvname, &start)) {
-            std::cerr<<"No data after all\n";
+            std::cerr<<"WARN: No data after all\n";
             continue;
         }
 
