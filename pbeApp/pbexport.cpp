@@ -43,9 +43,10 @@ struct PBWriter
     epicsTimeStamp endofyear;
 
     std::ofstream outpb;
-    int error;
+    int typeChangeError;
+    const stdString name;
 
-    PBWriter(DataReader& reader);
+    PBWriter(DataReader& reader, stdString pv);
     void write(); // all work is done through this method
 
     void prepFile();
@@ -190,17 +191,21 @@ void transcode_samples(PBWriter& self)
 		}
 	}
 
+	DbrType previousType = self.reader.getType();
     do{
-    	if (self.reader.getType() != self.dtype) {
-    		std::cerr<<"ERROR: The type of PV changed from " << self.dtype << " to " << self.reader.getType() << "\n";
-    		self.error = 1;
+    	if (self.reader.getType() != previousType) {
+    		std::cerr<<"ERROR: The type of PV "<<self.name.c_str()<<" changed from " << previousType << " to " << self.reader.getType() << "\n";
+    		std::cerr<<"wrote: "<<nwrote<<"\n";
+    		self.typeChangeError += 1;
     		return;
     	}
+    	previousType = self.reader.getType();
         sample_t *sample = (sample_t*)self.samp;
 
         if(sample->stamp.secPastEpoch>=self.endofyear.secPastEpoch) {
             std::cerr<<"Year boundary "<<sample->stamp.secPastEpoch<<" "<<self.endofyear.secPastEpoch <<"\n";
-            std::cerr<<"wrote: "<<nwrote;
+            std::cerr<<"wrote: "<<nwrote<<"\n";
+            self.typeChangeError = 0;
             return;
         }
         unsigned int secintoyear = sample->stamp.secPastEpoch - self.startofyear.secPastEpoch;
@@ -308,8 +313,7 @@ void PBWriter::skipForward(const char* file)
 	const char *str;
 	//doesn't matter which data type we choose, because we are interested only into
 	//timestamp, which is stored at the beginning of the event, so it's the same for
-	//all types. However, VectorString is slightly different as it has a different value.
-	//Other types don't work with VectorString, but VectorString works for all.
+	//all types. Sometimes this doesn't work, but we can deal with those cases separately.
 	EPICS::VectorString en;
 
 	if (!std::getline(inpstr, temp).good()) return; //payload info
@@ -414,7 +418,11 @@ void PBWriter::prepFile()
     header.set_pvname(reader.channel_name.c_str());
 
     std::ostringstream fname;
-    fname << pvpathname(reader.channel_name.c_str())<<":"<<year<<".pb";
+    if (typeChangeError > 0) {
+    	fname << pvpathname(reader.channel_name.c_str())<<":"<<year<<".pb."<<typeChangeError;
+    } else {
+    	fname << pvpathname(reader.channel_name.c_str())<<":"<<year<<".pb";
+    }
 
     int fileexists = 0;
     {
@@ -447,24 +455,24 @@ void PBWriter::prepFile()
     }
 }
 
-PBWriter::PBWriter(DataReader& reader)
+PBWriter::PBWriter(DataReader& reader, stdString pv)
     :reader(reader)
 	,info(reader.getInfo())
 	,year(0)
+    ,name(pv)
 {
     samp = reader.get();
 }
 
 void PBWriter::write()
 {
-	error = 0;
+	typeChangeError = 0;
     while(samp) {
         prepFile();
         if (!samp) break;
         (*transcode)(*this);
         bool ok = outpb.good();
         outpb.close();
-        if (error) break;
         if(!ok) {
             std::cerr<<"Error writing file\n";
             break;
@@ -487,35 +495,39 @@ try{
 
     std::string stdpvname;
     while(std::getline(std::cin, stdpvname).good()) {
-        if(stdpvname=="<>exit")
-            break;
-        stdString pvname(stdpvname.c_str());
+    	try {
+			if(stdpvname=="<>exit")
+				break;
+			stdString pvname(stdpvname.c_str());
 
-        std::cerr<<"Got "<<stdpvname<<"\n";
+			std::cerr<<"Got "<<stdpvname<<"\n";
 
-        std::cerr<<"Visit PV "<<pvname.c_str()<<"\n";
-        stdString dirname;
-        AutoPtr<RTree> tree(idx.getTree(pvname, dirname));
+			std::cerr<<"Visit PV "<<pvname.c_str()<<"\n";
+			stdString dirname;
+			AutoPtr<RTree> tree(idx.getTree(pvname, dirname));
 
-        epicsTime start,end;
-        if(!tree || !tree->getInterval(start, end)) {
-            std::cerr<<"WARN: No Data or no times\n";
-            continue;
-        }
+			epicsTime start,end;
+			if(!tree || !tree->getInterval(start, end)) {
+				std::cerr<<"WARN: No Data or no times\n";
+				continue;
+			}
 
-        std::cerr<<" start "<<start<<" end   "<<end<<"\n";
+			std::cerr<<" start "<<start<<" end   "<<end<<"\n";
 
-        AutoPtr<DataReader> reader(ReaderFactory::create(idx, ReaderFactory::Raw, 0.0));
+			AutoPtr<DataReader> reader(ReaderFactory::create(idx, ReaderFactory::Raw, 0.0));
 
-        std::cerr<<" Type "<<reader->getType()<<" count "<<reader->getCount()<<"\n";
+			std::cerr<<" Type "<<reader->getType()<<" count "<<reader->getCount()<<"\n";
 
-        if(!reader->find(pvname, &start)) {
-            std::cerr<<"WARN: No data after all\n";
-            continue;
-        }
+			if(!reader->find(pvname, &start)) {
+				std::cerr<<"WARN: No data after all\n";
+				continue;
+			}
 
-        PBWriter writer(*reader);
-        writer.write();
+			PBWriter writer(*reader,pvname);
+			writer.write();
+    	} catch (std::exception& e) {
+    		std::cerr<<"Exception: "<<e.what()<<"\n";
+    	}
         std::cerr<<"Done\n";
         std::cout<<"Done\n"; // exportall.py uses this
     }
