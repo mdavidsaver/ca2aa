@@ -21,6 +21,8 @@ def getargs():
     P.add_argument('--seps', default=':-{}', help='PV name seperators (default ":-{}")')
     P.add_argument('--progs', default=mydir, help='Directory under which ./bin/*/listpvs helpers are found')
     P.add_argument('--pv', default='^.*$', help='Regular expression: only PVs that match will be exported')
+    P.add_argument('--pvlist', default=None, help='Read PVs from file')
+
     return P.parse_args()
 
 args = getargs()
@@ -49,6 +51,11 @@ jobs = Queue(10)
 
 regex = re.compile(args.pv)
 
+pvlist = None
+if args.pvlist is not None:
+  with open(args.pvlist, 'r') as f:
+    pvlist = [line.strip() for line in f]
+
 
 def worker():
   slave = SP.Popen([pbexport, idxfile],
@@ -60,6 +67,8 @@ def worker():
     if pv is None:
       break
     if regex.match(pv) is None:
+      continue
+    if pvlist is not None and pv not in pvlist:
       continue
     print 'pv',pv
     slave.stdin.write(pv+'\n')
