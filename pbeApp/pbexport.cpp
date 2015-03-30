@@ -232,7 +232,7 @@ void transcode_samples(PBWriter& self)
 			continue;
 		} else if (sevr > 3) {
 			//sevr == 3856 || sevr == 3968
-			std::cerr<<"Severity "<< sevr<<" encountered\n";
+			std::cerr<<"WARN: Severity "<< sevr<<" encountered\n";
 			write_fields = 0; //don't write fields if special severity
 		} else if (disconnected_epoch != 0) {
 			//this is the first sample with value after a disconnected one
@@ -292,7 +292,7 @@ void transcode_samples(PBWriter& self)
             self.outpb.write(&encbuf.outbuf[0], encbuf.outbuf.size());
             nwrote++;
         }catch(std::exception& e) {
-            std::cerr<<"Error encoding sample! : "<<e.what()<<"\n";
+            std::cerr<<"ERROR encoding sample! : "<<e.what()<<"\n";
             encbuf.reset();
             // skip
         }
@@ -306,26 +306,19 @@ void transcode_samples(PBWriter& self)
 
 void PBWriter::skipForward(const char* file)
 {
-	//find the last sample that was written into the given file
+	//find the last sample that was written into the given file and skip forward the reader to the first
+	//sample that has a timestamp later than the last sample in the file
 	std::ifstream inpstr(file);
 	std::string temp;
 	char *bfr;
 	const char *str;
-	//doesn't matter which data type we choose, because we are interested only into
-	//timestamp, which is stored at the beginning of the event, so it's the same for
-	//all types. Sometimes this doesn't work, but we can deal with those cases separately.
+	//Doesn't matter which data type we choose, because we are interested only into timestamp,
+	//which is stored at the beginning of the event, so it's the same for all types.
+	//Sometimes this doesn't work, but we can deal with those cases separately.
 	EPICS::VectorString en;
 
-	if (!std::getline(inpstr, temp).good()) return; //payload info
-/*
-	EPICS::PayloadInfo info;
-	str = temp.c_str();
-	int l = unescape_plan(str,temp.length());
-	bfr = (char*)malloc(sizeof(char) * l);
-	unescape(temp.c_str(), temp.length(),bfr,l);
-	info.ParseFromString(temp);
-	free(bfr);
-*/
+	if (!std::getline(inpstr, temp).good()) return; //payload info; don't care what it is, just make sure it was read
+
 	while(std::getline(inpstr, temp).good()) {
 		str = temp.c_str();
 		int l = unescape_plan(str,temp.length());
@@ -347,7 +340,7 @@ void PBWriter::skipForward(const char* file)
 	}
 
 	if (samp && (sampseconds == sec)) {
-		unsigned int sampnano = samp->stamp.nsec;
+		unsigned int sampnano = samp->stamp.nsec; //in some cases I got overflow!?
 		while (samp && (sampseconds == sec && sampnano <= nano)) {
 			samp = reader.next();
 			if (samp) {
@@ -468,15 +461,27 @@ void PBWriter::write()
 {
 	typeChangeError = 0;
     while(samp) {
-        prepFile();
-        if (!samp) break;
-        (*transcode)(*this);
-        bool ok = outpb.good();
-        outpb.close();
-        if(!ok) {
-            std::cerr<<"Error writing file\n";
-            break;
-        }
+    	try {
+			prepFile();
+			if (!samp) break;
+			(*transcode)(*this);
+    	} catch (std::exception& up) {
+    		if (std::strstr(up.what(),"Error in data header")) {
+    			//Error in the data header means a corrupted sample data .
+    			//It can happen in the prepFile or in the transcode. Either way the resolution is the same
+    			std::cerr<<"ERROR: "<<name.c_str()<<": Corrupted header, continuing with the next sample\n";
+    			samp = reader.next();
+    		} else {
+    			//tough life
+    			throw up;
+    		}
+    	}
+    	bool ok = outpb.good();
+		outpb.close();
+		if(!ok) {
+			std::cerr<<"Error writing file\n";
+			break;
+		}
     }
 }
 
@@ -484,7 +489,7 @@ int main(int argc, char *argv[])
 {
     if(argc<2)
         return 2;
-try{
+    try{
     {
         char *seps = getenv("NAMESEPS");
         if(seps)
@@ -526,7 +531,8 @@ try{
 			PBWriter writer(*reader,pvname);
 			writer.write();
     	} catch (std::exception& e) {
-    		std::cerr<<"Exception: "<<e.what()<<"\n";
+    		//print exception and continue with the next pv
+    		std::cerr<<"Exception: "<<stdpvname.c_str()<<": "<<e.what()<<"\n";
     	}
         std::cerr<<"Done\n";
         std::cout<<"Done\n"; // exportall.py uses this
