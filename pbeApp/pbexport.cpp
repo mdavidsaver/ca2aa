@@ -28,6 +28,8 @@
 #include "pbeutil.h"
 #include "EPICSEvent.pb.h"
 
+#include <google/protobuf/stubs/common.h>
+
 struct PBWriter
 {
     DataReader& reader;
@@ -314,17 +316,22 @@ void PBWriter::skipForward(const char* file)
 	const char *str;
 	//Doesn't matter which data type we choose, because we are interested only into timestamp,
 	//which is stored at the beginning of the event, so it's the same for all types.
-	//Sometimes this doesn't work, but we can deal with those cases separately.
+	//Sometimes protobuf prints a warning, because a value is missing, but the timestamp is still there
 	EPICS::VectorString en;
 
 	if (!std::getline(inpstr, temp).good()) return; //payload info; don't care what it is, just make sure it was read
-
+	bool ok;
+	int logged = 0;
 	while(std::getline(inpstr, temp).good()) {
 		str = temp.c_str();
 		int l = unescape_plan(str,temp.length());
 		bfr = (char*)malloc(sizeof(char) * l);
 		unescape(temp.c_str(), temp.length(),bfr,l);
-		en.ParseFromString(bfr);
+		ok = en.ParseFromString(bfr);
+		if (!ok && logged == 0){
+			std::cerr<<"WARN: "<<name.c_str()<<": Can't parse the data. Probably value is missing.\n";
+			logged++;
+		}
 		free(bfr);
 	}
 	inpstr.close();
@@ -467,13 +474,15 @@ void PBWriter::write()
 			(*transcode)(*this);
     	} catch (std::exception& up) {
     		if (std::strstr(up.what(),"Error in data header")) {
-    			//Error in the data header means a corrupted sample data .
-    			//It can happen in the prepFile or in the transcode. Either way the resolution is the same
-    			std::cerr<<"ERROR: "<<name.c_str()<<": Corrupted header, continuing with the next sample\n";
+    			//Error in the data header means a corrupted sample data.
+    			//It can happen in the prepFile or in the transcode. Either way the resolution is the same.
+    			//We try to move ahead. If it doesn't work, abort.
+    			std::cerr<<"ERROR: "<<name.c_str()<<": Corrupted header, continuing with the next sample.\n"<<up.what()<<"\n";
     			samp = reader.next();
     		} else {
-    			//tough life
-    			throw up;
+    			//tough luck
+    			outpb.close();
+    			throw std::runtime_error(up.what());
     		}
     	}
     	bool ok = outpb.good();
@@ -487,6 +496,9 @@ void PBWriter::write()
 
 int main(int argc, char *argv[])
 {
+	//comment this if you want to see the protobuf logs
+	google::protobuf::LogSilencer *silencer = new google::protobuf::LogSilencer();
+
     if(argc<2)
         return 2;
     try{
@@ -514,6 +526,7 @@ int main(int argc, char *argv[])
 			epicsTime start,end;
 			if(!tree || !tree->getInterval(start, end)) {
 				std::cerr<<"WARN: No Data or no times\n";
+                std::cout<<"Done\n";
 				continue;
 			}
 
@@ -525,6 +538,7 @@ int main(int argc, char *argv[])
 
 			if(!reader->find(pvname, &start)) {
 				std::cerr<<"WARN: No data after all\n";
+                std::cout<<"Done\n";
 				continue;
 			}
 
@@ -539,6 +553,7 @@ int main(int argc, char *argv[])
     }
 
     std::cerr<<"Done\n";
+    delete silencer;
     return 0;
 }catch(std::exception& e){
     std::cerr<<"Exception: "<<e.what()<<"\n";
