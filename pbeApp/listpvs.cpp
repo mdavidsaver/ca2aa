@@ -41,7 +41,7 @@ try{
         return 1;
     }
     do {
-    	names.push_back(iter.getName());
+        names.push_back(iter.getName());
         //std::cout<<iter.getName().c_str()<<"\n";
     }while(idx.getNextChannel(iter));
 
