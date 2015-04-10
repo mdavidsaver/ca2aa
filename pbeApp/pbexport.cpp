@@ -476,8 +476,9 @@ void PBWriter::write()
             prepFile();
             if (!samp) break;
             (*transcode)(*this);
-        } catch (std::exception& up) {
+        } catch (GenericException& up) {
             if (std::strstr(up.what(),"Error in data header")) {
+                // From RawDataReader::getHeader()
                 //Error in the data header means a corrupted sample data.
                 //It can happen in the prepFile or in the transcode. Either way the resolution is the same.
                 //We try to move ahead. If it doesn't work, abort.
@@ -488,7 +489,11 @@ void PBWriter::write()
                 outpb.close();
                 throw;
             }
+        } catch(...) {
+            outpb.close();
+            throw;
         }
+
         bool ok = outpb.good();
         outpb.close();
         if(!ok) {
