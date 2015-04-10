@@ -316,25 +316,20 @@ void skip(PBWriter& self, const char* file)
     //sample that has a timestamp later than the last sample in the file
     std::ifstream inpstr(file);
     std::string temp;
-    char *bfr;
-    const char *str;
     decoder sample;
 
     if (!std::getline(inpstr, temp).good()) return; //payload info; don't care what it is, just make sure it was read
 
-    bool ok;
     int logged = 0;
     while(std::getline(inpstr, temp).good()) {
-        str = temp.c_str();
-        int l = unescape_plan(str,temp.length());
-        bfr = (char*)malloc(sizeof(char) * l);
-        unescape(temp.c_str(), temp.length(),bfr,l);
-        ok = sample.ParseFromString(bfr);
+        int l = unescape_plan(temp.c_str(), temp.length());
+        std::vector<char> buf(l);
+        unescape(temp.c_str(), temp.length(), &buf[0], buf.size());
+        bool ok = sample.ParseFromString(&buf[0]);
         if (!ok && logged == 0){
             std::cerr<<"WARN: "<<self.name.c_str()<<": Can't parse the data. Probably value is missing.\n";
             logged++;
         }
-        free(bfr);
     }
     inpstr.close();
     unsigned int sec = sample.secondsintoyear() + self.startofyear.secPastEpoch;
