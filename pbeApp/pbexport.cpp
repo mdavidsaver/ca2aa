@@ -52,9 +52,9 @@ struct PBWriter
     PBWriter(DataReader& reader, stdString pv);
     void write(); // all work is done through this method
 
-    void prepFile();
+    bool prepFile();
 
-    void (*skipForward)(PBWriter&,const char *file);
+    bool (*skipForward)(PBWriter&,const char *file);
 
     void (*transcode)(PBWriter&); // Points to a transcode_samples<>() specialization
 };
@@ -308,9 +308,9 @@ void transcode_samples(PBWriter& self)
 }
 
 template<int dbr, int array>
-void skip(PBWriter& self, const char* file)
-{
-	typedef typename dbrstruct<dbr,array>::pbtype decoder;
+bool skip(PBWriter& self, const char* file) {
+    typedef typename dbrstruct<dbr, array>::pbtype decoder;
+    dbrstruct<dbr, array> type;
 
     //find the last sample that was written into the given file and skip forward the reader to the first
     //sample that has a timestamp later than the last sample in the file
@@ -318,7 +318,26 @@ void skip(PBWriter& self, const char* file)
     std::string temp;
     decoder sample;
 
-    if (!std::getline(inpstr, temp).good()) return; //payload info; don't care what it is, just make sure it was read
+    //payload info; don't care what it is, just make sure it was read
+    if (!std::getline(inpstr, temp).good()) {
+        std::ostringstream msg;
+        msg << "Cannot decode the file header in " << file;
+        throw std::runtime_error(msg.str());
+    }
+
+    EPICS::PayloadInfo info;
+    int l = unescape_plan(temp.c_str(), temp.length());
+    std::vector<char> buf(l);
+    unescape(temp.c_str(), temp.length(), &buf[0], buf.size());
+    info.ParseFromString(&buf[0]);
+
+    if ((int) (info.type()) != type.pbcode) {
+        std::cerr << "ERROR: The existing file " << self.name.c_str()
+                << " is of a different type '" << info.type()
+                << "' than the new data '" << type.pbcode << "\n";
+        self.typeChangeError += 1;
+        return false;
+    }
 
     int logged = 0;
     while(std::getline(inpstr, temp).good()) {
@@ -353,9 +372,10 @@ void skip(PBWriter& self, const char* file)
             }
         }
     }
+    return true;
 }
 
-void PBWriter::prepFile()
+bool PBWriter::prepFile()
 {
     const RawValue::Data *samp(reader.get());
     getYear(samp->stamp, &year);
@@ -429,7 +449,9 @@ void PBWriter::prepFile()
         if(fp) {
             fclose(fp);
             fileexists = 1;
-            (*skipForward)(*this,fname.str().c_str());
+            if (!(*skipForward)(*this,fname.str().c_str())) {
+            	return false;
+            }
             //std::cerr<<"ERROR: File already exists! "<<fname.str()<<"\n";
             //samp=NULL;
             //return;
@@ -452,6 +474,7 @@ void PBWriter::prepFile()
     if (!fileexists) { //if file exists do not write header
         outpb.write(&encbuf.outbuf[0], encbuf.outbuf.size());
     }
+    return true;
 }
 
 PBWriter::PBWriter(DataReader& reader, stdString pv)
@@ -468,9 +491,10 @@ void PBWriter::write()
     typeChangeError = 0;
     while(samp) {
         try {
-            prepFile();
-            if (!samp) break;
-            (*transcode)(*this);
+            if (prepFile()) {
+                if (!samp) break;
+                (*transcode)(*this);
+            }
         } catch (GenericException& up) {
             if (std::strstr(up.what(),"Error in data header")) {
                 // From RawDataReader::getHeader()
