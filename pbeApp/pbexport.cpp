@@ -346,7 +346,7 @@ bool skip(PBWriter& self, const char* file) {
         unescape(temp.c_str(), temp.length(), &buf[0], buf.size());
         bool ok = sample.ParseFromString(&buf[0]);
         if (!ok && logged == 0){
-            std::cerr<<"WARN: "<<self.name.c_str()<<": Can't parse the data. Probably value is missing.\n";
+            std::cerr<<"WARN: "<<self.name.c_str()<<": Data parsing problem.\n";
             logged++;
         }
     }
@@ -554,6 +554,7 @@ int main(int argc, char *argv[])
             epicsTime start,end;
             if(!tree || !tree->getInterval(start, end)) {
                 std::cerr<<"WARN: No Data or no times\n";
+                std::cout<<"Done\n"; // exportall.py uses this
                 continue;
             }
 
@@ -565,6 +566,7 @@ int main(int argc, char *argv[])
 
             if(!reader->find(pvname, &start)) {
                 std::cerr<<"WARN: No data after all\n";
+                std::cout<<"Done\n"; // exportall.py uses this
                 continue;
             }
 
