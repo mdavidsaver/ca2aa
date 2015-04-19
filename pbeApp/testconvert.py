@@ -214,5 +214,34 @@ class TestDate(unittest.TestCase):
                 (42, {'sec':1425494790, 'ns':4000}),
                 ])
 
+    def test_skip(self):
+        self.convertPV('pv:skip')
+        self.convertPV('pv:skip')
+        #After two conversion the file still has one set of data
+        self.assertPBFile('pv/skip:2015.pb',
+            head={'year':2015, 'type':6},
+            contents=[
+                (42, {'sec':1425494780, 'fv':[
+                    ('HOPR', '10'),('LOPR', '0'),('EGU', 'tick'),('HIHI', '0'),
+                    ('HIGH', '0'),('LOW', '0'),('LOLO', '0'),('PREC', '0'),
+                    ]}),
+                (12, {'sec':1425494785, 'ns':5000}),
+                (5, {'sec':1425494790, 'ns':6000}),
+                (42, {'sec':1425494795, 'ns':4000}),
+                ])
+        #Convert one more time and check that file is still the same
+        self.convertPV('pv:skip')
+        self.assertPBFile('pv/skip:2015.pb',        
+            head={'year':2015, 'type':6},
+            contents=[
+                (42, {'sec':1425494780, 'fv':[
+                    ('HOPR', '10'),('LOPR', '0'),('EGU', 'tick'),('HIHI', '0'),
+                    ('HIGH', '0'),('LOW', '0'),('LOLO', '0'),('PREC', '0'),
+                    ]}),
+                (12, {'sec':1425494785, 'ns':5000}),
+                (5, {'sec':1425494790, 'ns':6000}),
+                (42, {'sec':1425494795, 'ns':4000}),
+                ])
+
 if __name__=='__main__':
     unittest.main()
