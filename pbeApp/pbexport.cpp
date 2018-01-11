@@ -31,6 +31,7 @@
 #include "EPICSEvent.pb.h"
 
 #include <google/protobuf/stubs/common.h>
+#include <google/protobuf/io/coded_stream.h>
 
 struct PBWriter
 {

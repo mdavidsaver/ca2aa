@@ -48,6 +48,7 @@ include $(TOP)/configure/RULES
 	install -m755 $< $@
 
 pbexport$(OBJ): EPICSEvent.pb.h
+testPB$(OBJ): EPICSEvent.pb.h
 EPICSEvent$(OBJ): EPICSEvent.pb.cc
 
 testconvert.py: EPICSEvent_pb2.py
