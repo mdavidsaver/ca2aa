@@ -2,12 +2,16 @@
 #include <sstream>
 #include <algorithm>
 
+#include <iostream>
+#include <cstring>
+
 #include <google/protobuf/io/zero_copy_stream_impl.h>
 #include <google/protobuf/io/coded_stream.h>
 
 #include <epicsUnitTest.h>
 #include <testMain.h>
 
+#include "pbsearch.h"
 #include "pbstreams.h"
 #include "pbeutil.h"
 #include "EPICSEvent.pb.h"
@@ -118,11 +122,82 @@ static void writeSample()
     }
 }
 
+static const char* getLastSampleFile()
+{
+    char const *folder = getenv("TMPDIR");
+    if (folder == 0)
+        folder = "/tmp";
+    std::stringstream ss;
+    ss<<folder<<"/lastSample:2015.pb";
+    return ss.str().c_str();
+}
+
+//data to find the last sample in them
+static void genLastSampleData()
+{
+    EPICS::ScalarInt encoder;
+    EPICS::PayloadInfo info;
+    std::ofstream outpb;
+
+
+    info.set_type(EPICS::SCALAR_INT);
+    info.set_pvname("lastSample");
+    info.set_elementcount(1);
+    info.set_year(2015);
+
+    escapingarraystream encbuf;
+    {
+        google::protobuf::io::CodedOutputStream encstrm(&encbuf);
+        info.SerializeToCodedStream(&encstrm);
+    }
+    encbuf.finalize();
+
+    outpb.open(getLastSampleFile(), std::fstream::out | std::fstream::binary);
+    outpb.write(&encbuf.outbuf[0], encbuf.outbuf.size());
+
+    int i;
+    for (i = 0; i < 5; i++) {
+        encoder.Clear();
+        encoder.set_secondsintoyear(1234+i);
+        encoder.set_nano(5000 + i);
+        encoder.set_val(0);
+        {
+            google::protobuf::io::CodedOutputStream encstrm(&encbuf);
+            encoder.SerializeToCodedStream(&encstrm);
+        }
+        encbuf.finalize();
+        outpb.write(&encbuf.outbuf[0], encbuf.outbuf.size());
+    }
+
+    outpb.close();
+
+}
+
+static void testFindLastSample()
+{
+    genLastSampleData();
+
+    EPICS::ScalarInt sample;
+    sample = searcher<DBR_TIME_LONG,0>::getLastSample(getLastSampleFile());
+    testOk(sample.secondsintoyear() == 1238, "Sample seconds %d",sample.secondsintoyear());
+    testOk(sample.nano() == 5004, "Sample nanos %d",sample.nano());
+
+    EPICS::ScalarDouble sampleDouble;
+    try {
+        sampleDouble = searcher<DBR_TIME_DOUBLE,0>::getLastSample(getLastSampleFile());
+        testOk(0,"Should fail the conversion because of mismatching type");
+    } catch (std::invalid_argument& e) {
+        testOk1(1);
+    }
+    remove(getLastSampleFile());
+}
+
 MAIN(testPB)
 {
-    testPlan(26);
+    testPlan(29);
     testTime();
     testEscape();
     writeSample();
+    testFindLastSample();
     return testDone();
 }

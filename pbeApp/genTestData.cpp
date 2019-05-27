@@ -28,6 +28,11 @@
 #include <DataWriter.h>
 #include <CtrlInfo.h>
 
+#include "pbstreams.h"
+#include "pbeutil.h"
+#include "EPICSEvent.pb.h"
+#include <google/protobuf/stubs/common.h>
+
 /* 2015-03-04 18:46:20 UTC */
 #define BASETIME (1425494780 - POSIX_TIME_AT_EPICS_EPOCH)
 
@@ -255,6 +260,40 @@ static void getRepeat(Index& idx)
     writer->add((dbr_time_double*)&val);
 }
 
+// ArchiveEngine disable archiving
+static void getSkipForward(Index& idx)
+{
+    stdString name("pv:skip");
+    CtrlInfo info;
+    info.setNumeric(0, "tick", 0, 10, 0, 0, 0, 0);
+
+    AutoPtr<DataWriter> writer(new DataWriter(idx, name, info,
+                                              DBR_TIME_DOUBLE, 1, 1.0, 10));
+
+    dbr_time_double val;
+    val.severity = val.status = 0;
+    val.stamp.nsec = 0;
+
+    val.value = 42;
+    val.stamp.secPastEpoch = BASETIME;
+    writer->add((dbr_time_double*)&val);
+
+    val.value = 12;
+    val.stamp.secPastEpoch += 5;
+    val.stamp.nsec = 5000;
+    writer->add((dbr_time_double*)&val);
+
+    val.value = 5;
+    val.stamp.secPastEpoch += 5;
+    val.stamp.nsec = 6000;
+    writer->add((dbr_time_double*)&val);
+
+    val.value = 42;
+    val.stamp.secPastEpoch += 5;
+    val.stamp.nsec = 4000;
+    writer->add((dbr_time_double*)&val);
+}
+
 int main(int argc, char *argv[])
 {
     if(argc<2)
@@ -269,6 +308,7 @@ int main(int argc, char *argv[])
         getRestart(idx);
         getDisable(idx);
         getRepeat(idx);
+        getSkipForward(idx);
         return 0;
     }catch(std::exception& e){
         std::cerr<<"Error: "<<e.what()<<"\n";

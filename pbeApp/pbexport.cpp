@@ -25,6 +25,7 @@
 #include <SpreadsheetReader.h>
 #include <AutoIndex.h>
 
+#include "pbsearch.h"
 #include "pbstreams.h"
 #include "pbeutil.h"
 #include "EPICSEvent.pb.h"
@@ -53,37 +54,15 @@ struct PBWriter
     PBWriter(DataReader& reader, stdString pv);
     void write(); // all work is done through this method
 
-    void prepFile();
+    bool prepFile();
+
+    void forwardReaderToTime(unsigned int sampleSec, unsigned int sampleNano);
 
     void (*skipForward)(PBWriter&,const char *file);
 
     void (*transcode)(PBWriter&); // Points to a transcode_samples<>() specialization
 };
 
-/* Type information lookup, indexed by DBR_* type, and whether the PV is an array.
- * Looks up:
- *  typename dbrstruct<DBR,isarray>::dbrtype (ie. struct dbr_time_double)
- *  typename dbrstruct<DBR,isarray>::pbtype (ie. class EPICS::ScalarDouble)
- *  dbrstruct<DBR,isarray>::pbcode (an enum PayloadType value cast to int, ie. EPICS::SCALAR_DOUBLE)
- */
-template<int dbr, int isarray> struct dbrstruct{};
-#define ENTRY(ARR, DBR, dbr, PBC, PT) \
-template<> struct dbrstruct<DBR, ARR> {typedef dbr dbrtype; typedef EPICS::PBC pbtype; enum {pbcode=EPICS::PT};}
-ENTRY(0, DBR_TIME_STRING, dbr_time_string, ScalarString, SCALAR_STRING);
-ENTRY(0, DBR_TIME_CHAR, dbr_time_char, ScalarByte, SCALAR_BYTE);
-ENTRY(0, DBR_TIME_SHORT, dbr_time_short, ScalarShort, SCALAR_SHORT);
-ENTRY(0, DBR_TIME_ENUM, dbr_time_enum, ScalarEnum, SCALAR_ENUM);
-ENTRY(0, DBR_TIME_LONG, dbr_time_long, ScalarInt, SCALAR_INT);
-ENTRY(0, DBR_TIME_FLOAT, dbr_time_float, ScalarFloat, SCALAR_FLOAT);
-ENTRY(0, DBR_TIME_DOUBLE, dbr_time_double, ScalarDouble, SCALAR_DOUBLE);
-ENTRY(1, DBR_TIME_STRING, dbr_time_string, VectorString, WAVEFORM_STRING);
-ENTRY(1, DBR_TIME_CHAR, dbr_time_char, VectorChar, WAVEFORM_BYTE);
-ENTRY(1, DBR_TIME_SHORT, dbr_time_short, VectorShort, WAVEFORM_SHORT);
-ENTRY(1, DBR_TIME_ENUM, dbr_time_enum, VectorEnum, WAVEFORM_ENUM);
-ENTRY(1, DBR_TIME_LONG, dbr_time_long, VectorInt, WAVEFORM_INT);
-ENTRY(1, DBR_TIME_FLOAT, dbr_time_float, VectorFloat, WAVEFORM_FLOAT);
-ENTRY(1, DBR_TIME_DOUBLE, dbr_time_double, VectorDouble, WAVEFORM_DOUBLE);
-#undef ENTRY
 
 /* Type specific operations helper for transcode_samples<>().
  *  valueop<DBR,isarray>::set(PBClass, dbr_* pointer, # of elements)
@@ -308,55 +287,42 @@ void transcode_samples(PBWriter& self)
     std::cerr<<"Wrote "<<nwrote<<"\n";
 }
 
-template<int dbr, int array>
-void skip(PBWriter& self, const char* file)
+void PBWriter::forwardReaderToTime(unsigned int sampleSec, unsigned int sampleNano)
 {
-	typedef typename dbrstruct<dbr,array>::pbtype decoder;
-
-    //find the last sample that was written into the given file and skip forward the reader to the first
-    //sample that has a timestamp later than the last sample in the file
-    std::ifstream inpstr(file);
-    std::string temp;
-    decoder sample;
-
-    if (!std::getline(inpstr, temp).good()) return; //payload info; don't care what it is, just make sure it was read
-
-    int logged = 0;
-    while(std::getline(inpstr, temp).good()) {
-        int l = unescape_plan(temp.c_str(), temp.length());
-        std::vector<char> buf(l);
-        unescape(temp.c_str(), temp.length(), &buf[0], buf.size());
-        bool ok = sample.ParseFromString(&buf[0]);
-        if (!ok && logged == 0){
-            std::cerr<<"WARN: "<<self.name.c_str()<<": Can't parse the data. Probably value is missing.\n";
-            logged++;
-        }
-    }
-    inpstr.close();
-    unsigned int sec = sample.secondsintoyear() + self.startofyear.secPastEpoch;
-    unsigned int nano = sample.nano();
+    unsigned int sec = sampleSec;
+    unsigned int nano = sampleNano;
 
     //now skip forward to the first sample that is later than the last event read from the file
-    unsigned int sampseconds = self.samp->stamp.secPastEpoch;
-    while((sampseconds < sec) && self.samp) {
-        self.samp = self.reader.next();
-        if (self.samp)
-            sampseconds = self.samp->stamp.secPastEpoch;
+    unsigned int sampseconds = samp->stamp.secPastEpoch;
+    while ((sampseconds < sec) && samp) {
+        samp = reader.next();
+        if (samp)
+            sampseconds = samp->stamp.secPastEpoch;
     }
 
-    if (self.samp && (sampseconds == sec)) {
-        unsigned int sampnano = self.samp->stamp.nsec; //in some cases I got overflow!?
-        while (self.samp && (sampseconds == sec && sampnano <= nano)) {
-            self.samp = self.reader.next();
-            if (self.samp) {
-                sampseconds = self.samp->stamp.secPastEpoch;
-                sampnano = self.samp->stamp.nsec;
+    if (samp && (sampseconds == sec)) {
+        unsigned int sampnano = samp->stamp.nsec; //in some cases I got overflow!?
+        while (samp && (sampseconds == sec && sampnano <= nano)) {
+            samp = reader.next();
+            if (samp) {
+                sampseconds = samp->stamp.secPastEpoch;
+                sampnano = samp->stamp.nsec;
             }
         }
     }
 }
 
-void PBWriter::prepFile()
+template<int dbr, int array>
+void skip(PBWriter& self, const char* file)
+{
+    typedef typename dbrstruct<dbr, array>::pbtype decoder;
+
+    decoder sample;
+    sample = searcher<dbr,array>::getLastSample(file);
+    self.forwardReaderToTime(sample.secondsintoyear() + self.startofyear.secPastEpoch, sample.nano());
+}
+
+bool PBWriter::prepFile()
 {
     const RawValue::Data *samp(reader.get());
     getYear(samp->stamp, &year);
@@ -374,7 +340,7 @@ void PBWriter::prepFile()
         switch(dtype)
         {
 #define CASE(DBR) case DBR: transcode = &transcode_samples<DBR, 0>; \
-		skipForward = &skip<DBR, 0>; \
+        skipForward = &skip<DBR, 0>; \
     header.set_type((EPICS::PayloadType)dbrstruct<DBR, 0>::pbcode); break
         CASE(DBR_TIME_STRING);
         CASE(DBR_TIME_CHAR);
@@ -430,10 +396,14 @@ void PBWriter::prepFile()
         if(fp) {
             fclose(fp);
             fileexists = 1;
-            (*skipForward)(*this,fname.str().c_str());
-            //std::cerr<<"ERROR: File already exists! "<<fname.str()<<"\n";
-            //samp=NULL;
-            //return;
+            try {
+                (*skipForward)(*this,fname.str().c_str());
+            } catch (std::invalid_argument& e) {
+                //invalid argument is thrown when the sample type
+                //doesn't match the type in the existing file
+                typeChangeError++;
+                return false;
+            }
         }
     }
 
@@ -453,6 +423,7 @@ void PBWriter::prepFile()
     if (!fileexists) { //if file exists do not write header
         outpb.write(&encbuf.outbuf[0], encbuf.outbuf.size());
     }
+    return true;
 }
 
 PBWriter::PBWriter(DataReader& reader, stdString pv)
@@ -469,9 +440,10 @@ void PBWriter::write()
     typeChangeError = 0;
     while(samp) {
         try {
-            prepFile();
-            if (!samp) break;
-            (*transcode)(*this);
+            if (prepFile()) {
+                if (!samp) break;
+                (*transcode)(*this);
+            }
         } catch (GenericException& up) {
             if (std::strstr(up.what(),"Error in data header")) {
                 // From RawDataReader::getHeader()
@@ -531,6 +503,7 @@ int main(int argc, char *argv[])
             epicsTime start,end;
             if(!tree || !tree->getInterval(start, end)) {
                 std::cerr<<"WARN: No Data or no times\n";
+                std::cout<<"Done\n"; // exportall.py uses this
                 continue;
             }
 
@@ -542,6 +515,7 @@ int main(int argc, char *argv[])
 
             if(!reader->find(pvname, &start)) {
                 std::cerr<<"WARN: No data after all\n";
+                std::cout<<"Done\n"; // exportall.py uses this
                 continue;
             }
 
